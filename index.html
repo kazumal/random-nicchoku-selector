@@ -12,11 +12,14 @@
     .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
     .out { white-space: pre-wrap; background: #f6f6f6; padding: 12px; border-radius: 8px; }
     small { color: #666; }
+    .btn-line { background: #06c755; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; }
+    .btn-line:disabled { opacity: 0.5; cursor: not-allowed; }
   </style>
+  <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
 </head>
 <body>
   <h1>その月の日直順を決める</h1>
-  <p><small>同じ月・同じメンバーなら毎回同じ順序になるように「月(YYYY-MM)をシード」にしてシャッフルします。</small></p>
+  <p><small>ボタンを押すたびにランダムに順序が決まります。</small></p>
 
   <label>メンバー（1行1人）</label>
   <textarea id="names" placeholder="山田太郎\n佐藤花子\n..."></textarea>
@@ -26,36 +29,55 @@
     <input id="month" type="month" />
     <button id="gen">順番を作る</button>
     <button id="copy">コピー</button>
+    <button id="sendLine" class="btn-line" style="display:none;">LINEに送信</button>
   </div>
 
   <div class="out" id="result"></div>
 
   <script>
-    // --- シード付き PRNG（Mulberry32） ---
-    function mulberry32(seed) {
-      let t = seed >>> 0;
-      return function() {
-        t += 0x6D2B79F5;
-        let r = Math.imul(t ^ (t >>> 15), 1 | t);
-        r ^= r + Math.imul(r ^ (r >>> 7), 61 | r);
-        return ((r ^ (r >>> 14)) >>> 0) / 4294967296;
-      };
-    }
+    // ========================================
+    // LIFF設定
+    // ========================================
+    // ↓ LINE Developers で発行された LIFF ID を入れてください
+    const LIFF_ID = "YOUR_LIFF_ID";  // 例: "1234567890-abcdefgh"
 
-    function seededShuffle(arr, rng) {
+    let liffInitialized = false;
+
+    // LIFF初期化
+    (async () => {
+      try {
+        await liff.init({ liffId: LIFF_ID });
+        liffInitialized = true;
+
+        // LINEアプリ内で開いているかを判定
+        if (liff.isInClient()) {
+          console.log("LINEアプリ内で実行中");
+          // LINE送信ボタンを表示
+          document.getElementById('sendLine').style.display = 'inline-block';
+        } else {
+          console.log("LINEアプリ外ブラウザで開かれています");
+        }
+
+        // 将来、プロフィール等が欲しくなったら：
+        // const profile = await liff.getProfile();
+        // console.log(profile.displayName);
+      } catch (e) {
+        console.error("LIFF init error:", e);
+      }
+    })();
+
+    // ========================================
+    // 日直シフト作成機能
+    // ========================================
+    
+    // --- ランダムシャッフル（Fisher-Yates） ---
+    function shuffle(arr) {
       const a = arr.slice();
       for (let i = a.length - 1; i > 0; i--) {
-        const j = Math.floor(rng() * (i + 1));
+        const j = Math.floor(Math.random() * (i + 1));
         [a[i], a[j]] = [a[j], a[i]];
       }
       return a;
-    }
-
-    function ymToSeed(ym) {
-      // "2025-10" -> 202510 の整数に
-      const m = /^(\d{4})-(\d{2})$/.exec(ym);
-      if (!m) return 0;
-      return parseInt(m[1] + m[2], 10);
     }
 
     function buildSchedule(shuffled, year, month) {
@@ -66,7 +88,7 @@
         const idx = (d - 1) % shuffled.length;
         out.push(`${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2,'0')}  …  ${shuffled[idx]}`);
       }
-      return out.join('\n');
+      return out.join(', ');
     }
 
     const $names = document.getElementById('names');
@@ -86,11 +108,9 @@
       localStorage.setItem('nichoku_names', JSON.stringify(raw));
 
       const ym = $month.value;
-      const seed = ymToSeed(ym);
-      if (!seed) { $result.textContent = '対象月を YYYY-MM で選択してください'; return; }
+      if (!ym) { $result.textContent = '対象月を YYYY-MM で選択してください'; return; }
 
-      const rng = mulberry32(seed);
-      const shuffled = seededShuffle(raw, rng);
+      const shuffled = shuffle(raw);
 
       const [y, m] = ym.split('-').map(n => parseInt(n, 10));
       const text = buildSchedule(shuffled, y, m);
@@ -103,6 +123,37 @@
         await navigator.clipboard.writeText($result.textContent);
         alert('コピーしました');
       } catch { alert('コピーできませんでした'); }
+    };
+
+    // LINE送信ボタン
+    document.getElementById('sendLine').onclick = async () => {
+      if (!$result.textContent) {
+        alert('先に順番を作成してください');
+        return;
+      }
+      if (!liffInitialized) {
+        alert('LIFF初期化中です。少々お待ちください');
+        return;
+      }
+      
+      try {
+        // LINEトークに送信
+        await liff.shareTargetPicker([
+          {
+            type: "text",
+            text: `📅 日直シフト\n\n${$result.textContent}`
+          }
+        ]);
+        // 送信成功後はLIFFを閉じることもできる
+        // liff.closeWindow();
+      } catch (e) {
+        console.error('LINE送信エラー:', e);
+        if (e.code === 'UNAUTHORIZED') {
+          alert('送信がキャンセルされました');
+        } else {
+          alert('送信に失敗しました');
+        }
+      }
     };
   </script>
 </body>
