@@ -3,14 +3,15 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>日直シフター</title>
+  <title>日直順決定</title>
   <style>
     body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; max-width: 720px; margin: 24px auto; padding: 0 16px; }
     h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
     textarea, input, button, select { font-size: 16px; }
-    textarea { width: 100%; height: 160px; }
+    textarea { width: 100%; box-sizing: border-box; }
+    textarea#names { height: 160px; }
+    textarea#result { height: 300px; background: #f6f6f6; padding: 12px; border-radius: 8px; }
     .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-    .out { white-space: pre-wrap; background: #f6f6f6; padding: 12px; border-radius: 8px; }
     small { color: #666; }
     .btn-line { background: #06c755; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; }
     .btn-line:disabled { opacity: 0.5; cursor: not-allowed; }
@@ -18,21 +19,19 @@
   <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
 </head>
 <body>
-  <h1>その月の日直順を決める</h1>
+  <h1>日直順を決める</h1>
   <p><small>ボタンを押すたびにランダムに順序が決まります。</small></p>
 
   <label>メンバー（1行1人）</label>
-  <textarea id="names" placeholder="山田太郎\n佐藤花子\n..."></textarea>
+  <textarea id="names" placeholder="山田太郎\n佐藤花子\n伊藤健太\n..."></textarea>
 
   <div class="row" style="margin: 8px 0;">
-    <label for="month">対象月</label>
-    <input id="month" type="month" />
     <button id="gen">順番を作る</button>
     <button id="copy">コピー</button>
     <button id="sendLine" class="btn-line" style="display:none;">LINEに送信</button>
   </div>
 
-  <div class="out" id="result"></div>
+  <textarea id="result" readonly></textarea>
 
   <script>
     // ========================================
@@ -80,40 +79,20 @@
       return a;
     }
 
-    function buildSchedule(shuffled, year, month) {
-      // 指定月の日数分、巡回で割り当て
-      const daysInMonth = new Date(year, month, 0).getDate(); // month: 1-12 を渡す
-      let out = [];
-      for (let d = 1; d <= daysInMonth; d++) {
-        const idx = (d - 1) % shuffled.length;
-        out.push(`${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2,'0')}  …  ${shuffled[idx]}`);
-      }
-      return out.join(', ');
-    }
-
     const $names = document.getElementById('names');
-    const $month = document.getElementById('month');
     const $result = document.getElementById('result');
 
     // 保存/復元
     const saved = localStorage.getItem('nichoku_names');
     if (saved) $names.value = JSON.parse(saved).join('\n');
-    // 初期値：今月
-    const now = new Date();
-    $month.value = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
 
     document.getElementById('gen').onclick = () => {
       const raw = $names.value.split('\n').map(s => s.trim()).filter(Boolean);
       if (raw.length === 0) { $result.textContent = 'メンバーを入力してください'; return; }
       localStorage.setItem('nichoku_names', JSON.stringify(raw));
 
-      const ym = $month.value;
-      if (!ym) { $result.textContent = '対象月を YYYY-MM で選択してください'; return; }
-
       const shuffled = shuffle(raw);
-
-      const [y, m] = ym.split('-').map(n => parseInt(n, 10));
-      const text = buildSchedule(shuffled, y, m);
+      const text = shuffled.map((name, i) => `${i + 1}. ${name}`).join('\n');
       $result.textContent = text;
     };
 
@@ -141,7 +120,7 @@
         await liff.shareTargetPicker([
           {
             type: "text",
-            text: `📅 日直シフト\n\n${$result.textContent}`
+            text: `📋 日直順\n\n${$result.textContent}`
           }
         ]);
         // 送信成功後はLIFFを閉じることもできる
