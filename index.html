@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>日直シフター</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; max-width: 720px; margin: 24px auto; padding: 0 16px; }
+    h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
+    textarea, input, button, select { font-size: 16px; }
+    textarea { width: 100%; height: 160px; }
+    .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .out { white-space: pre-wrap; background: #f6f6f6; padding: 12px; border-radius: 8px; }
+    small { color: #666; }
+  </style>
+</head>
+<body>
+  <h1>その月の日直順を決める</h1>
+  <p><small>同じ月・同じメンバーなら毎回同じ順序になるように「月(YYYY-MM)をシード」にしてシャッフルします。</small></p>
+
+  <label>メンバー（1行1人）</label>
+  <textarea id="names" placeholder="山田太郎\n佐藤花子\n..."></textarea>
+
+  <div class="row" style="margin: 8px 0;">
+    <label for="month">対象月</label>
+    <input id="month" type="month" />
+    <button id="gen">順番を作る</button>
+    <button id="copy">コピー</button>
+  </div>
+
+  <div class="out" id="result"></div>
+
+  <script>
+    // --- シード付き PRNG（Mulberry32） ---
+    function mulberry32(seed) {
+      let t = seed >>> 0;
+      return function() {
+        t += 0x6D2B79F5;
+        let r = Math.imul(t ^ (t >>> 15), 1 | t);
+        r ^= r + Math.imul(r ^ (r >>> 7), 61 | r);
+        return ((r ^ (r >>> 14)) >>> 0) / 4294967296;
+      };
+    }
+
+    function seededShuffle(arr, rng) {
+      const a = arr.slice();
+      for (let i = a.length - 1; i > 0; i--) {
+        const j = Math.floor(rng() * (i + 1));
+        [a[i], a[j]] = [a[j], a[i]];
+      }
+      return a;
+    }
+
+    function ymToSeed(ym) {
+      // "2025-10" -> 202510 の整数に
+      const m = /^(\d{4})-(\d{2})$/.exec(ym);
+      if (!m) return 0;
+      return parseInt(m[1] + m[2], 10);
+    }
+
+    function buildSchedule(shuffled, year, month) {
+      // 指定月の日数分、巡回で割り当て
+      const daysInMonth = new Date(year, month, 0).getDate(); // month: 1-12 を渡す
+      let out = [];
+      for (let d = 1; d <= daysInMonth; d++) {
+        const idx = (d - 1) % shuffled.length;
+        out.push(`${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2,'0')}  …  ${shuffled[idx]}`);
+      }
+      return out.join('\n');
+    }
+
+    const $names = document.getElementById('names');
+    const $month = document.getElementById('month');
+    const $result = document.getElementById('result');
+
+    // 保存/復元
+    const saved = localStorage.getItem('nichoku_names');
+    if (saved) $names.value = JSON.parse(saved).join('\n');
+    // 初期値：今月
+    const now = new Date();
+    $month.value = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
+
+    document.getElementById('gen').onclick = () => {
+      const raw = $names.value.split('\n').map(s => s.trim()).filter(Boolean);
+      if (raw.length === 0) { $result.textContent = 'メンバーを入力してください'; return; }
+      localStorage.setItem('nichoku_names', JSON.stringify(raw));
+
+      const ym = $month.value;
+      const seed = ymToSeed(ym);
+      if (!seed) { $result.textContent = '対象月を YYYY-MM で選択してください'; return; }
+
+      const rng = mulberry32(seed);
+      const shuffled = seededShuffle(raw, rng);
+
+      const [y, m] = ym.split('-').map(n => parseInt(n, 10));
+      const text = buildSchedule(shuffled, y, m);
+      $result.textContent = text;
+    };
+
+    document.getElementById('copy').onclick = async () => {
+      if (!$result.textContent) return;
+      try {
+        await navigator.clipboard.writeText($result.textContent);
+        alert('コピーしました');
+      } catch { alert('コピーできませんでした'); }
+    };
+  </script>
+</body>
+</html>
