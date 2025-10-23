@@ -33,7 +33,44 @@
 
   <textarea id="result" readonly></textarea>
 
+  <hr style="margin: 24px 0;">
+
+  <h2 style="font-size: 1.2rem; margin-bottom: 8px;">📅 Googleカレンダーに登録</h2>
+  <p><small>営業日（月〜金）に日直予定を自動登録します</small></p>
+
+  <div id="authSection">
+    <button id="authorizeButton" style="background: #4285f4; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer;">
+      Googleでログイン
+    </button>
+    <button id="signoutButton" style="display: none; background: #666; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; margin-left: 8px;">
+      ログアウト
+    </button>
+  </div>
+
+  <div id="calendarSection" style="display: none; margin-top: 16px;">
+    <div class="row" style="margin: 8px 0;">
+      <label for="targetMonth">対象月</label>
+      <input id="targetMonth" type="month" />
+      <button id="addToCalendar" style="background: #34a853; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer;">
+        カレンダーに登録
+      </button>
+    </div>
+    <p id="calendarStatus" style="color: #666; font-size: 0.9rem;"></p>
+  </div>
+
   <script>
+    // ========================================
+    // Google Calendar API 設定
+    // ========================================
+    const API_KEY = "AIzaSyChGcto89INvvGaGwyGqd0Dvz-iyAeExVI";
+    const CLIENT_ID = "330190960613-5607fg4e4kv2gdlgorshr1rduj38rgot.apps.googleusercontent.com";
+    const DISCOVERY_DOC = "https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest";
+    const SCOPES = "https://www.googleapis.com/auth/calendar.events";
+
+    let tokenClient;
+    let gapiInited = false;
+    let gisInited = false;
+
     // ========================================
     // LIFF設定
     // ========================================
@@ -64,6 +101,164 @@
         console.error("LIFF init error:", e);
       }
     })();
+
+    // ========================================
+    // Google Calendar API 初期化
+    // ========================================
+    
+    // gapi初期化
+    function gapiLoaded() {
+      gapi.load('client', initializeGapiClient);
+    }
+
+    async function initializeGapiClient() {
+      await gapi.client.init({
+        apiKey: API_KEY,
+        discoveryDocs: [DISCOVERY_DOC],
+      });
+      gapiInited = true;
+      maybeEnableButtons();
+    }
+
+    // GIS初期化
+    function gisLoaded() {
+      tokenClient = google.accounts.oauth2.initTokenClient({
+        client_id: CLIENT_ID,
+        scope: SCOPES,
+        callback: '', // 後で設定
+      });
+      gisInited = true;
+      maybeEnableButtons();
+    }
+
+    function maybeEnableButtons() {
+      if (gapiInited && gisInited) {
+        document.getElementById('authorizeButton').style.display = 'inline-block';
+      }
+    }
+
+    // 認証処理
+    function handleAuthClick() {
+      tokenClient.callback = async (resp) => {
+        if (resp.error !== undefined) {
+          throw (resp);
+        }
+        document.getElementById('signoutButton').style.display = 'inline-block';
+        document.getElementById('authorizeButton').style.display = 'none';
+        document.getElementById('calendarSection').style.display = 'block';
+        
+        // 初期値：今月
+        const now = new Date();
+        document.getElementById('targetMonth').value = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
+      };
+
+      if (gapi.client.getToken() === null) {
+        tokenClient.requestAccessToken({prompt: 'consent'});
+      } else {
+        tokenClient.requestAccessToken({prompt: ''});
+      }
+    }
+
+    // ログアウト処理
+    function handleSignoutClick() {
+      const token = gapi.client.getToken();
+      if (token !== null) {
+        google.accounts.oauth2.revoke(token.access_token);
+        gapi.client.setToken('');
+        document.getElementById('authorizeButton').style.display = 'inline-block';
+        document.getElementById('signoutButton').style.display = 'none';
+        document.getElementById('calendarSection').style.display = 'none';
+        document.getElementById('calendarStatus').textContent = '';
+      }
+    }
+
+    // 営業日（月〜金）を取得
+    function getWeekdays(year, month) {
+      const weekdays = [];
+      const daysInMonth = new Date(year, month, 0).getDate();
+      
+      for (let day = 1; day <= daysInMonth; day++) {
+        const date = new Date(year, month - 1, day);
+        const dayOfWeek = date.getDay();
+        // 0=日曜, 6=土曜 を除外
+        if (dayOfWeek !== 0 && dayOfWeek !== 6) {
+          weekdays.push(date);
+        }
+      }
+      return weekdays;
+    }
+
+    // カレンダーにイベントを作成
+    async function addToCalendar() {
+      const raw = document.getElementById('names').value.split('\n').map(s => s.trim()).filter(Boolean);
+      if (raw.length === 0) {
+        alert('メンバーを入力してください');
+        return;
+      }
+
+      const targetMonth = document.getElementById('targetMonth').value;
+      if (!targetMonth) {
+        alert('対象月を選択してください');
+        return;
+      }
+
+      const [year, month] = targetMonth.split('-').map(n => parseInt(n, 10));
+      
+      // 営業日を取得
+      const weekdays = getWeekdays(year, month);
+      if (weekdays.length === 0) {
+        alert('営業日が見つかりません');
+        return;
+      }
+
+      // メンバーをシャッフル
+      const shuffled = shuffle(raw);
+      
+      document.getElementById('calendarStatus').textContent = '登録中...';
+      document.getElementById('addToCalendar').disabled = true;
+
+      try {
+        let successCount = 0;
+        
+        for (let i = 0; i < weekdays.length; i++) {
+          const date = weekdays[i];
+          const memberIndex = i % shuffled.length;
+          const nextMemberIndex = (i + 1) % shuffled.length;
+          
+          // 日付をYYYY-MM-DD形式に
+          const dateStr = date.toISOString().split('T')[0];
+          
+          // イベント作成
+          const event = {
+            summary: `日直：${shuffled[memberIndex]}（${shuffled[nextMemberIndex]}）`,
+            start: {
+              date: dateStr,
+            },
+            end: {
+              date: dateStr,
+            },
+            colorId: '5', // 黄色
+          };
+
+          await gapi.client.calendar.events.insert({
+            calendarId: 'primary',
+            resource: event,
+          });
+          
+          successCount++;
+          document.getElementById('calendarStatus').textContent = `登録中... ${successCount}/${weekdays.length}`;
+        }
+
+        document.getElementById('calendarStatus').textContent = `✅ ${successCount}件の予定を登録しました！`;
+        alert(`${successCount}件の日直予定をカレンダーに登録しました！`);
+      } catch (error) {
+        console.error('Calendar API error:', error);
+        document.getElementById('calendarStatus').textContent = '❌ 登録に失敗しました';
+        alert('カレンダーへの登録に失敗しました: ' + error.message);
+      } finally {
+        document.getElementById('addToCalendar').disabled = false;
+      }
+    }
 
     // ========================================
     // 日直シフト作成機能
@@ -134,6 +329,19 @@
         }
       }
     };
+
+    // ========================================
+    // イベントリスナー設定
+    // ========================================
+    
+    // 認証ボタン（DOMContentLoaded後に設定）
+    document.addEventListener('DOMContentLoaded', () => {
+      document.getElementById('authorizeButton').addEventListener('click', handleAuthClick);
+      document.getElementById('signoutButton').addEventListener('click', handleSignoutClick);
+      document.getElementById('addToCalendar').addEventListener('click', addToCalendar);
+    });
   </script>
+  <script async defer src="https://accounts.google.com/gsi/client" onload="gisLoaded()"></script>
+  <script async defer src="https://apis.google.com/js/api.js" onload="gapiLoaded()"></script>
 </body>
 </html>
